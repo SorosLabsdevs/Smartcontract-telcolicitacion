@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-//Author : SorosLabs Devs
+// Author: SorosLabs Devs
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
@@ -8,6 +8,7 @@ contract SubastaEspectro is ERC721, Ownable {
     struct Empresa {
         string nombre;
         address direccion;
+        bool autorizada;
     }
     
     struct Ronda {
@@ -45,6 +46,7 @@ contract SubastaEspectro is ERC721, Ownable {
     event RondaCerrada(uint256 indexed idRonda, address indexed ganador, uint256 precioGanador, string categoria, string tipoFrecuencia);
     event NFTAsignado(address indexed ganador, uint256 indexed tokenId);
     event PenalizacionEmitida(uint256 indexed idRonda, address indexed ganador, string razon);
+    event EmpresaAutorizada(address indexed empresa, bool autorizada);
 
     constructor(
         uint256 _duracionRonda,
@@ -60,11 +62,19 @@ contract SubastaEspectro is ERC721, Ownable {
         fechaFinRonda = block.timestamp + _duracionRonda;
     }
 
-    function registrarEmpresa(string memory _nombre) external {
-        empresas[msg.sender] = Empresa(_nombre, msg.sender);
+    function registrarEmpresa(string memory _nombre, address _direccion) external onlyOwner {
+        empresas[_direccion] = Empresa(_nombre, _direccion, true);
+        emit EmpresaAutorizada(_direccion, true);
+    }
+
+    function autorizarEmpresa(address _direccion, bool _autorizada) external onlyOwner {
+        require(empresas[_direccion].direccion == _direccion, "Empresa no registrada");
+        empresas[_direccion].autorizada = _autorizada;
+        emit EmpresaAutorizada(_direccion, _autorizada);
     }
 
     function hacerOferta(uint256 _monto) external {
+        require(empresas[msg.sender].autorizada, "Empresa no autorizada para pujar");
         require(_monto >= montoMinimoPuja, "La puja no alcanza el monto minimo requerido");
         if (ofertas[msg.sender] == 0) {
             listaParticipantes.push(msg.sender);
