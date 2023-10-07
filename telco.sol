@@ -1,132 +1,129 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-// Author : Soros Team Devs
+//Author : SorosLabs Devs
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
-contract SubastaEspectro {
-    string[] public categoriasEspectro = ["BandaAncha", "BandaMedia", "BandaEstrecha", "5G", "B12"]; // Puedes agregar más categorías según sea necesario
-    string[] public tiposFrecuencia = ["Banda1", "Banda2", "Banda3", "Tipo4", "Tipo5"]; // Ejemplo: Banda 1, Banda 2, Banda 3
-
-    address public entidadReguladora;
-    address public ganador;
+contract SubastaEspectro is ERC721, Ownable {
+    struct Empresa {
+        string nombre;
+        address direccion;
+    }
+    
+    struct Ronda {
+        uint256 id;
+        address ganador;
+        uint256 ofertaGanadora;
+        uint256 timestampFin;
+        string categoria;
+        string tipoFrecuencia;
+    }
+    
+    struct TokenMetadata {
+        string nombreEmpresa;
+        address direccionEmpresa;
+        uint256 montoPuja;
+        uint256 idRonda;
+        string categoria;
+        string tipoFrecuencia;
+    }
+    
+    mapping(uint256 => TokenMetadata) public tokenMetadata;
+    mapping(address => Empresa) public empresas;
+    
+    string public categoriaActual;
+    string public tipoFrecuenciaActual;
+    uint256 public montoMinimoPuja;
     uint256 public duracionRonda;
     uint256 public fechaFinRonda;
     uint256 public numeroRonda;
-    string public categoriaActual;
-    string public tipoFrecuenciaActual;
-    IERC20 public tokenEspectro; // Contrato ERC-20 para los tokens de espectro
-    uint256 public montoMinimoPuja; // Monto mínimo requerido para realizar una puja
+    Ronda[] public historialRondas;
     address[] public listaParticipantes;
     mapping(address => uint256) public ofertas;
-    mapping(address => bool) public empresasTelecomAutorizadas;
 
     event NuevaOferta(address indexed participante, uint256 monto, string categoria, string tipoFrecuencia);
-    event RondaCerrada(uint256 numeroRonda, uint256 precioGanador, string categoria, string tipoFrecuencia);
-    event AsignacionEspectro(address indexed ganador, uint256 precio, string categoria, string tipoFrecuencia);
-    event TransferenciaTokens(address indexed destinatario, uint256 cantidad);
-    event EmpresaTelecomAutorizada(address indexed empresa);
+    event RondaCerrada(uint256 indexed idRonda, address indexed ganador, uint256 precioGanador, string categoria, string tipoFrecuencia);
+    event NFTAsignado(address indexed ganador, uint256 indexed tokenId);
+    event PenalizacionEmitida(uint256 indexed idRonda, address indexed ganador, string razon);
 
     constructor(
         uint256 _duracionRonda,
         string memory _categoriaInicial,
         string memory _tipoFrecuenciaInicial,
-        uint256 _montoMinimoPuja,
-        address _tokenEspectro
-    ) {
-        entidadReguladora = msg.sender;
+        uint256 _montoMinimoPuja
+    ) ERC721("TokenEspectro", "TESP") {
         duracionRonda = _duracionRonda;
         numeroRonda = 1;
         categoriaActual = _categoriaInicial;
         tipoFrecuenciaActual = _tipoFrecuenciaInicial;
         montoMinimoPuja = _montoMinimoPuja;
-        tokenEspectro = IERC20(_tokenEspectro); // Establecer el contrato ERC-20 de espectro
+        fechaFinRonda = block.timestamp + _duracionRonda;
     }
 
-    modifier soloEntidadReguladora() {
-        require(msg.sender == entidadReguladora, "Solo la entidad reguladora puede llamar a esta funciOn");
-        _;
+    function registrarEmpresa(string memory _nombre) external {
+        empresas[msg.sender] = Empresa(_nombre, msg.sender);
     }
 
-    modifier concursoAbierto() {
-        require(block.timestamp < fechaFinRonda, "La ronda ha expirado");
-        _;
-    }
-
-    function autorizarEmpresaTelecom(address _empresa) external soloEntidadReguladora {
-        empresasTelecomAutorizadas[_empresa] = true;
-        emit EmpresaTelecomAutorizada(_empresa);
-    }
-
-    function hacerOferta(uint256 _monto) external payable concursoAbierto {
+    function hacerOferta(uint256 _monto) external {
         require(_monto >= montoMinimoPuja, "La puja no alcanza el monto minimo requerido");
-        require(msg.value > ofertas[ganador], "La oferta debe superar la oferta actual");
-
-        if (ganador != address(0)) {
-            // Reembolsar al participante anterior
-            address participanteAnterior = ganador;
-            uint256 ofertaAnterior = ofertas[participanteAnterior];
-            payable(participanteAnterior).transfer(ofertaAnterior);
-        }
-
-        if (!esParticipante(msg.sender)) {
+        if (ofertas[msg.sender] == 0) {
             listaParticipantes.push(msg.sender);
         }
-        
-        ofertas[msg.sender] = msg.value;
-        ganador = msg.sender;
-
-        emit NuevaOferta(msg.sender, msg.value, categoriaActual, tipoFrecuenciaActual);
+        ofertas[msg.sender] = _monto;
+        emit NuevaOferta(msg.sender, _monto, categoriaActual, tipoFrecuenciaActual);
     }
 
-    function cerrarRonda() external soloEntidadReguladora concursoAbierto {
-        fechaFinRonda = block.timestamp + duracionRonda;
+    function cerrarRonda() external onlyOwner {
+        require(block.timestamp >= fechaFinRonda, "La ronda aun no ha finalizado");
+        address maxBidder = address(0);
+        uint256 maxBid = 0;
 
-        emit RondaCerrada(numeroRonda, ofertas[ganador], categoriaActual, tipoFrecuenciaActual);
+        for (uint256 i = 0; i < listaParticipantes.length; i++) {
+            if (ofertas[listaParticipantes[i]] > maxBid) {
+                maxBid = ofertas[listaParticipantes[i]];
+                maxBidder = listaParticipantes[i];
+            }
+        }
 
-        // Asignar tokens ERC-20 de espectro al ganador
-        uint256 tokensAsignados = ofertas[ganador] * 1000; // Cada unidad de ether equivale a 1000 tokens
-        tokenEspectro.transfer(ganador, tokensAsignados);
+        Ronda memory rondaFinalizada = Ronda({
+            id: numeroRonda,
+            ganador: maxBidder,
+            ofertaGanadora: maxBid,
+            timestampFin: block.timestamp,
+            categoria: categoriaActual,
+            tipoFrecuencia: tipoFrecuenciaActual
+        });
+        historialRondas.push(rondaFinalizada);
 
-        emit AsignacionEspectro(ganador, ofertas[ganador], categoriaActual, tipoFrecuenciaActual);
+        emit RondaCerrada(numeroRonda, maxBidder, maxBid, categoriaActual, tipoFrecuenciaActual);
 
-        // Reiniciar ganador y ofertas
-        ganador = address(0);
+        if (maxBidder != address(0)) {
+            tokenMetadata[numeroRonda] = TokenMetadata({
+                nombreEmpresa: empresas[maxBidder].nombre,
+                direccionEmpresa: maxBidder,
+                montoPuja: maxBid,
+                idRonda: numeroRonda,
+                categoria: categoriaActual,
+                tipoFrecuencia: tipoFrecuenciaActual
+            });
+            _mint(maxBidder, numeroRonda);
+            emit NFTAsignado(maxBidder, numeroRonda);
+        }
+
         for (uint256 i = 0; i < listaParticipantes.length; i++) {
             ofertas[listaParticipantes[i]] = 0;
         }
         delete listaParticipantes;
         numeroRonda++;
+        fechaFinRonda = block.timestamp + duracionRonda;
     }
 
-    function cambiarDuracionRonda(uint256 _nuevaDuracion) external soloEntidadReguladora {
-        duracionRonda = _nuevaDuracion;
-    }
-
-    function cambiarCategoriaActual(string memory _nuevaCategoria) external soloEntidadReguladora {
-        categoriaActual = _nuevaCategoria;
-    }
-
-    function cambiarTipoFrecuenciaActual(string memory _nuevoTipoFrecuencia) external soloEntidadReguladora {
-        tipoFrecuenciaActual = _nuevoTipoFrecuencia;
-    }
-
-    function cambiarMontoMinimoPuja(uint256 _nuevoMonto) external soloEntidadReguladora {
-        montoMinimoPuja = _nuevoMonto;
-    }
-
-    // Función para obtener el saldo actual de tokens ERC-20 en el contrato
-    function obtenerSaldoTokens() external view returns (uint256) {
-        return tokenEspectro.balanceOf(address(this));
-    }
-
-    // Función auxiliar para verificar si una dirección es un participante
-    function esParticipante(address _direccion) internal view returns (bool) {
-        for (uint256 i = 0; i < listaParticipantes.length; i++) {
-            if (listaParticipantes[i] == _direccion) {
-                return true;
-            }
-        }
-        return false;
+    function emitirPenalizacion(uint256 _idRonda, string memory _razon) external onlyOwner {
+        require(_idRonda > 0 && _idRonda <= historialRondas.length, "Ronda no valida");
+        Ronda memory ronda = historialRondas[_idRonda - 1];
+        require(ronda.ganador != address(0), "No hay ganador para penalizar");
+        
+        emit PenalizacionEmitida(_idRonda, ronda.ganador, _razon);
+        tokenMetadata[_idRonda].nombreEmpresa = string(abi.encodePacked(tokenMetadata[_idRonda].nombreEmpresa, " (PENALIZADO: ", _razon, ")"));
     }
 }
